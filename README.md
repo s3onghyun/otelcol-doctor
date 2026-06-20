@@ -90,6 +90,13 @@ Focused on the **Collector config** on purpose — not instrumentation SDKs, not
 dashboards. Covers traces/metrics/logs pipelines, OTLP/Prometheus/Loki/Tempo/Mimir
 export, and the core-vs-contrib distinction. Vendor-neutral.
 
+## Pairs with
+
+This skill supplies the validated *steps*; a persona supplies the *judgment*. It
+composes naturally with **[s3onghyun-soul](https://github.com/s3onghyun/s3onghyun-soul)**
+— an evidence-first DevOps/Platform consultant soul that reaches for `otelcol validate`
+(this skill) when it touches a Collector config.
+
 ## Contributing
 
 Found an edge it gets wrong, or a footgun worth encoding? Open an issue or PR
