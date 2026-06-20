@@ -1,0 +1,62 @@
+# Corrected version of broken-config.yaml.
+#
+# Diagnosis (what was wrong → why it failed → fix):
+#  1. `logging` exporter         → removed in current Collector       → replaced with `debug`.
+#  2. processors [batch, memory_limiter] in the metrics pipeline
+#                                → memory_limiter can't shed load if batch buffers first
+#                                → reordered to [memory_limiter, batch].
+#  3. `prometheus` exporter      → that's PULL (exposes /metrics); the goal was to PUSH to Mimir
+#                                → switched to `prometheusremotewrite`.
+#  4. otlp grpc on localhost:4317→ unreachable from other containers
+#                                → bound to 0.0.0.0:4317.
+#  5. traces exported only to `logging`/`debug`
+#                                → no real backend; added an `otlp` exporter to Tempo.
+#
+# Requires the *contrib* image: `prometheus` receiver and `prometheusremotewrite`
+# exporter are contrib-only. Validate with: otelcol-contrib validate --config=fixed-config.yaml
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317     # fix 4: reachable across the network
+  prometheus:                      # contrib-only (metrics)
+    config:
+      scrape_configs:
+        - job_name: app
+          static_configs:
+            - targets: [app:8080]
+
+processors:
+  memory_limiter:                  # fix 2: FIRST
+    check_interval: 1s
+    limit_mib: 512
+  batch: {}                        # LAST (before export)
+
+exporters:
+  debug:                           # fix 1: replaces `logging`
+    verbosity: detailed
+  prometheusremotewrite:           # fix 3: PUSH to Mimir/Thanos/remote-write endpoint
+    endpoint: ${env:MIMIR_REMOTE_WRITE_URL}
+  otlp:                            # fix 5: real traces backend
+    endpoint: ${env:TEMPO_OTLP_ENDPOINT}
+    tls:
+      insecure: true
+
+extensions:
+  health_check: {}                 # contrib
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite, debug]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp, debug]
+  telemetry:
+    logs:
+      level: info

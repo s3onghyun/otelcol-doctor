@@ -1,0 +1,39 @@
+# A config that "starts but no metrics arrive, and traces are missing".
+# Five real bugs hide in here. See fixed-config.yaml for the diagnosis.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317   # bug 4: only loopback — other containers can't reach it
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: app
+          static_configs:
+            - targets: [app:8080]
+
+processors:
+  batch: {}
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+
+exporters:
+  logging:                          # bug 1: removed exporter name
+    verbosity: detailed
+  prometheus:                       # bug 3: pull exporter, but intent was to PUSH to Mimir
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [batch, memory_limiter]   # bug 2: batch before memory_limiter
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging]
+      # bug 5: the otlp receiver is defined but the traces pipeline exports to the
+      # (invalid) logging exporter; once fixed, traces still need a real backend.

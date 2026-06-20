@@ -1,0 +1,134 @@
+---
+name: otel-collector-config
+description: >-
+  Write, fix, and validate OpenTelemetry Collector configuration (otelcol).
+  Use whenever the user is authoring or debugging an OpenTelemetry Collector
+  config YAML — defining receivers/processors/exporters/connectors, wiring
+  service pipelines, choosing between the core and contrib distributions, or
+  exporting to OTLP/Prometheus/Loki/Tempo/Mimir. Triggers on "otelcol",
+  "otel collector config", "collector pipeline", "receivers/processors/exporters",
+  "memory_limiter", "otlp exporter", "prometheusremotewrite", "tail_sampling".
+---
+
+# OpenTelemetry Collector config — doctor
+
+Generate correct configs from a plain-English description, and diagnose broken
+ones. The Collector is a small set of concepts with a lot of sharp edges; this
+skill encodes the edges so the output validates on the first try.
+
+## Mental model (get this right and everything follows)
+
+A Collector config has four component blocks plus a `service` block that wires
+them:
+
+```
+receivers:   # where data comes IN  (otlp, prometheus, hostmetrics, filelog, kafka…)
+processors:  # what happens in the MIDDLE, in order (memory_limiter, batch, transform…)
+exporters:   # where data goes OUT  (otlp, otlphttp, debug, prometheus, prometheusremotewrite…)
+connectors:  # bridge one pipeline's OUTPUT into another's INPUT (spanmetrics, routing…)
+extensions:  # collector-level features, not in the data path (health_check, pprof, zpages…)
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:  { receivers: [...], processors: [...], exporters: [...] }
+    metrics: { receivers: [...], processors: [...], exporters: [...] }
+    logs:    { receivers: [...], processors: [...], exporters: [...] }
+  telemetry: { ... }   # the Collector's OWN logs/metrics
+```
+
+**The #1 rule everyone violates:** defining a component under `receivers:` /
+`processors:` / `exporters:` does **nothing** on its own. A component only runs
+if it is referenced inside a `service.pipelines.<signal>` list. A config can be
+"valid" yet do nothing because a pipeline was never wired. Always check the
+`service` block last, and confirm every component you defined is actually used
+(and every name used is actually defined — that one fails validation).
+
+**Pipelines are per-signal.** `traces`, `metrics`, `logs` are separate
+pipelines. A receiver/exporter must support the signal of the pipeline it sits
+in (e.g. the `prometheus` receiver is metrics-only; putting it in a `traces`
+pipeline fails). You may run multiple named pipelines of the same signal
+(`metrics/internal`, `metrics/app`).
+
+## Workflow
+
+### 1. Pin the three questions
+- **Signals?** traces / metrics / logs (any subset).
+- **Sources (receivers)?** app via OTLP? scrape Prometheus targets? host metrics? tail log files? Kafka?
+- **Destinations (exporters)?** an OTLP backend (Tempo/Jaeger/vendor)? Prometheus (pull) or remote-write (push)? Loki? Mimir?
+
+### 2. Choose the distribution — core vs contrib (this trips people constantly)
+Many common components ship **only** in `otelcol-contrib`, not core `otelcol`:
+`prometheus` receiver, `hostmetrics`, `filelog`, `kafka`, `resourcedetection`,
+`transform`/`filter` (OTTL) processors, `tail_sampling`, the `spanmetrics`
+connector, `prometheusremotewrite`/`loki` exporters. If the config uses any of
+these, it needs the **contrib** image (`otel/opentelemetry-collector-contrib`)
+or a custom build via the OpenTelemetry Collector Builder (`ocb`). Calling for a
+contrib component on the core image is a startup crash, not a YAML error — flag it.
+
+### 3. Order processors correctly (order is significant and load-bearing)
+Processors run **in the listed order**. The canonical safe order:
+
+```
+processors: [memory_limiter, <resource/detection>, <sampling/filter/transform>, batch]
+```
+
+- **`memory_limiter` goes FIRST.** It must see data before anything buffers it,
+  otherwise it can't shed load. Putting `batch` before it defeats the purpose.
+- **`batch` goes LAST** (just before export) so it batches the final shape.
+- **`tail_sampling`** (traces) must come before `batch`, and needs whole traces —
+  don't shard the same trace across replicas without a load-balancing exporter
+  in front.
+
+### 4. Pick exporters deliberately
+- `otlp` = OTLP over **gRPC** (default 4317). `otlphttp` = OTLP over **HTTP** (4318). Match the backend's port/protocol.
+- `debug` is the console exporter (use `verbosity: detailed` while debugging). The old `logging` exporter is **removed/deprecated → use `debug`**.
+- Metrics to Prometheus: **`prometheus`** = Collector exposes a `/metrics` endpoint for Prometheus to **scrape** (pull). **`prometheusremotewrite`** = Collector **pushes** to a remote-write endpoint (Mimir/Thanos/Cortex/Prometheus `--web.enable-remote-write-receiver`). Don't confuse pull vs push.
+- Loki: the dedicated `loki` exporter is deprecated — send OTLP to Loki's native OTLP endpoint via `otlphttp` (`endpoint: http://loki:3100/otlp`).
+- Tempo/Jaeger: send via `otlp`/`otlphttp` (the standalone `jaeger` receiver/exporter are gone).
+
+### 5. Always include the safety/ops basics
+- `memory_limiter` processor in every pipeline that can be flooded.
+- `health_check` extension (and wire it into `service.extensions`).
+- For secrets/endpoints use env expansion: `endpoint: ${env:OTLP_ENDPOINT}` (note the `env:` prefix — bare `${VAR}` is deprecated syntax).
+- Set `service.telemetry.logs.level` and, if needed, expose the Collector's own metrics.
+
+### 6. Validate before declaring done
+Never hand back a config you haven't validated. The Collector has a built-in
+validator that loads and type-checks the full config without starting it:
+
+```
+otelcol validate --config=config.yaml          # core
+otelcol-contrib validate --config=config.yaml   # contrib
+```
+
+The bundled `scripts/validate.sh` wraps this (auto-detects the contrib binary,
+falls back to a Docker run if no local binary). If `otelcol` isn't available,
+say so explicitly rather than claiming the config is validated.
+
+## Fixing an existing config — run this checklist
+
+When handed a broken or "it starts but nothing arrives" config, check in order:
+
+1. **Unwired components** — every receiver/processor/exporter defined but not referenced in any `service.pipelines.*`? (silent no-op)
+2. **Undefined references** — a name used in a pipeline that isn't defined above? (validation error)
+3. **Signal mismatch** — a metrics-only receiver in a traces pipeline, etc.
+4. **core vs contrib** — a contrib-only component on the core image? (crash on start)
+5. **Processor order** — `batch` before `memory_limiter`? `memory_limiter` not first?
+6. **pull vs push exporter** — `prometheus` where `prometheusremotewrite` was meant (or vice-versa)?
+7. **Deprecated components** — `logging` exporter, `loki` exporter, `jaeger` receiver, bare `${VAR}` env syntax.
+8. **Endpoint/protocol** — gRPC vs HTTP port mismatch (4317 vs 4318); `tls`/`insecure` set correctly for the environment.
+9. **Endpoint binding** — receiver bound to `localhost` when traffic comes from other containers (needs `0.0.0.0`), or bound to `0.0.0.0` in a context where that's a security concern.
+
+State the diagnosis as "what was wrong → why it failed → the fix", then output
+the corrected config and validate it.
+
+## References
+- `references/components.md` — curated catalog of the most-used receivers / processors / exporters / connectors with the gotcha for each, and the core-vs-contrib split.
+- `examples/` — a before/after pair (a broken config and the corrected, validated version) showing the diagnosis style.
+
+## Output discipline
+- Emit **valid YAML only** inside config blocks — no `...` placeholders that won't parse.
+- Comment the non-obvious lines (why `memory_limiter` is first, why this exporter).
+- Prefer the smallest config that satisfies the request; don't bolt on components the user didn't ask for.
+- If a component is contrib-only, say so and name the image/build needed.
