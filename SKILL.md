@@ -123,9 +123,37 @@ When handed a broken or "it starts but nothing arrives" config, check in order:
 State the diagnosis as "what was wrong → why it failed → the fix", then output
 the corrected config and validate it.
 
+## The hard parts — get these right every time (see `references/advanced.md`)
+
+A capable model already handles the basics above. These five are the ones it gets
+*inconsistently* right; treat them as load-bearing and pull the exact patterns
+from `references/advanced.md`:
+
+1. **OTTL syntax** (`transform`/`filter` processors). It's a function language —
+   `set(attributes["x"], "y") where <cond>`, `delete_key(...)`, `replace_pattern(...)`
+   — **not** `attributes["x"] = "y"`, not jq, not SQL. Hallucinated OTTL is the #1
+   advanced failure. Always set `error_mode`.
+2. **spanmetrics (and any connector) is wired in TWO pipelines** — as an *exporter*
+   in the source pipeline and a *receiver* in the destination pipeline. Wiring it
+   once silently produces no metrics (or a validation error).
+3. **`resource_to_telemetry_conversion: enabled: true`** on the Prometheus/remote-write
+   exporter — without it, resource attributes (`service.name`, `deployment.environment`)
+   land only on `target_info`, not as labels on each series. This is the usual
+   "why is my label missing" cause.
+4. **`tail_sampling` at >1 replica needs a `loadbalancing` tier** keyed by `traceID`,
+   so all spans of a trace reach the same sampler instance. Tail-sampling directly
+   behind a plain load balancer is broken sampling. `tail_sampling` goes before `batch`.
+5. **Exporter reliability** — production exporters need `retry_on_failure` +
+   `sending_queue` (and a `file_storage`-backed queue if data loss is unacceptable).
+   Defaults drop data on a transient backend blip.
+
+When the request touches any of these, encode the pattern explicitly rather than
+trusting recall — that's the difference this skill is for.
+
 ## References
 - `references/components.md` — curated catalog of the most-used receivers / processors / exporters / connectors with the gotcha for each, and the core-vs-contrib split.
-- `examples/` — a before/after pair (a broken config and the corrected, validated version) showing the diagnosis style.
+- `references/advanced.md` — the hard parts in depth: OTTL patterns, spanmetrics dual-wiring, `resource_to_telemetry_conversion`, tail_sampling load-balancing topology, exporter reliability.
+- `examples/` — a before/after pair (broken → corrected, validated) and `spanmetrics-config.yaml`, a validated advanced config (spanmetrics connector + OTTL + remote-write labels + retry/queue).
 
 ## Output discipline
 - Emit **valid YAML only** inside config blocks — no `...` placeholders that won't parse.

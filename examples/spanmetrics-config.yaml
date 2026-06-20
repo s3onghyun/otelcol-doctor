@@ -1,0 +1,83 @@
+# Advanced, production-shaped config — exercises the parts a generic answer
+# usually botches. Run on the *contrib* image. Validate with:
+#   otelcol-contrib validate --config=spanmetrics-config.yaml
+#
+# What it shows:
+#  - spanmetrics connector wired in TWO pipelines (exporter in traces, receiver in metrics)
+#  - OTTL transform that scrubs a secret header and lowers URL cardinality
+#  - OTTL filter that drops health-check spans
+#  - prometheusremotewrite with resource_to_telemetry_conversion so resource
+#    attributes become labels on every series (not just target_info)
+#  - exporter retry_on_failure + sending_queue for delivery durability
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  transform:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - delete_key(attributes, "http.request.header.authorization")
+          - replace_pattern(attributes["url.path"], "/users/[0-9]+", "/users/{id}")
+  filter/drop_health:
+    error_mode: ignore
+    traces:
+      span:
+        - 'attributes["http.route"] == "/healthz"'
+        - 'attributes["http.route"] == "/readyz"'
+  batch: {}
+
+connectors:
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [5ms, 10ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+    dimensions:
+      - name: http.method
+      - name: http.route
+    exemplars:
+      enabled: true
+
+exporters:
+  otlp/tempo:
+    endpoint: ${env:TEMPO_ENDPOINT}
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      queue_size: 5000
+  prometheusremotewrite:
+    endpoint: ${env:MIMIR_ENDPOINT}
+    resource_to_telemetry_conversion:
+      enabled: true
+    retry_on_failure:
+      enabled: true
+
+extensions:
+  health_check: {}
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform, filter/drop_health, batch]
+      exporters: [spanmetrics, otlp/tempo]   # connector AS EXPORTER + real trace backend
+    metrics/spanmetrics:
+      receivers: [spanmetrics]               # SAME connector AS RECEIVER
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite]
+  telemetry:
+    logs:
+      level: info

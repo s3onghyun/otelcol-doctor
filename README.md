@@ -67,10 +67,22 @@ reaching my backend?"* and paste the config.
 
 | File | Purpose |
 |------|---------|
-| `SKILL.md` | The skill: mental model, authoring workflow, and the fix-it checklist. |
+| `SKILL.md` | The skill: mental model, authoring workflow, the fix-it checklist, and the five hard parts to get right every time. |
 | `references/components.md` | Curated catalog of the receivers/processors/exporters/connectors that actually come up, each with its gotcha and the **core vs contrib** split. |
-| `examples/` | A broken config and its diagnosed, validated repair. |
+| `references/advanced.md` | The hard parts in depth: OTTL patterns, spanmetrics dual-wiring, `resource_to_telemetry_conversion`, tail_sampling load-balancing topology, exporter reliability. |
+| `examples/` | A broken→fixed pair (five-bug repair) **and** `spanmetrics-config.yaml`, an advanced config (spanmetrics + OTTL + remote-write labels + retry/queue). All three pass `otelcol validate`. |
 | `scripts/validate.sh` | Wraps `otelcol validate` (auto-detects contrib, falls back to Docker). |
+
+## Honest scope
+
+A capable model already knows a lot of this. What the skill adds is **consistency
+and a validation loop**, not magic: it pulls the load-bearing details every time
+(processor order, the contrib-vs-core image, OTTL syntax, connector dual-wiring,
+`resource_to_telemetry_conversion`, tail-sampling's load-balancing requirement,
+exporter retry/queue) instead of relying on the model to remember them, and it
+finishes by running `otelcol validate` rather than handing you an unverified file.
+The bundled example configs are all checked with `otelcol validate` in CI-style
+fashion, so the patterns it teaches are known-good.
 
 ## Scope
 
