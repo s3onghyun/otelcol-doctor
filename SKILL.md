@@ -84,8 +84,8 @@ processors: [memory_limiter, <resource/detection>, <sampling/filter/transform>, 
 - `otlp` = OTLP over **gRPC** (default 4317). `otlphttp` = OTLP over **HTTP** (4318). Match the backend's port/protocol.
 - `debug` is the console exporter (use `verbosity: detailed` while debugging). The old `logging` exporter is **removed/deprecated → use `debug`**.
 - Metrics to Prometheus: **`prometheus`** = Collector exposes a `/metrics` endpoint for Prometheus to **scrape** (pull). **`prometheusremotewrite`** = Collector **pushes** to a remote-write endpoint (Mimir/Thanos/Cortex/Prometheus `--web.enable-remote-write-receiver`). Don't confuse pull vs push.
-- Loki: the dedicated `loki` exporter is deprecated — send OTLP to Loki's native OTLP endpoint via `otlphttp` (`endpoint: http://loki:3100/otlp`).
-- Tempo/Jaeger: send via `otlp`/`otlphttp` (the standalone `jaeger` receiver/exporter are gone).
+- Loki: the dedicated `loki` exporter was **removed** from contrib — send OTLP to Loki's native OTLP endpoint via `otlphttp` (`endpoint: http://loki:3100/otlp`).
+- Tempo/Jaeger: send via `otlp`/`otlphttp` — the `jaeger` **exporter** is gone (Jaeger ingests OTLP natively). The `jaeger` **receiver** still exists (beta, in core+contrib) for *ingesting* legacy Jaeger-protocol spans during a migration; don't call it removed.
 
 ### 5. Always include the safety/ops basics
 - `memory_limiter` processor in every pipeline that can be flooded.
@@ -116,7 +116,7 @@ When handed a broken or "it starts but nothing arrives" config, check in order:
 4. **core vs contrib** — a contrib-only component on the core image? (crash on start)
 5. **Processor order** — `batch` before `memory_limiter`? `memory_limiter` not first?
 6. **pull vs push exporter** — `prometheus` where `prometheusremotewrite` was meant (or vice-versa)?
-7. **Deprecated components** — `logging` exporter, `loki` exporter, `jaeger` receiver, bare `${VAR}` env syntax.
+7. **Removed components** — `logging` exporter (→`debug`), `loki` exporter (→`otlphttp`), `jaeger` **exporter** (→`otlp`; the jaeger *receiver* is still fine), bare `${VAR}` env syntax (→`${env:VAR}`).
 8. **Endpoint/protocol** — gRPC vs HTTP port mismatch (4317 vs 4318); `tls`/`insecure` set correctly for the environment.
 9. **Endpoint binding** — receiver bound to `localhost` when traffic comes from other containers (needs `0.0.0.0`), or bound to `0.0.0.0` in a context where that's a security concern.
 

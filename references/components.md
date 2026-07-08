@@ -8,6 +8,7 @@ Distribution legend: **[core]** ships in `otel/opentelemetry-collector`;
 | Component | Signals | Dist | Gotcha |
 |-----------|---------|------|--------|
 | `otlp` | traces, metrics, logs | core | Two listeners: `grpc` (4317) and `http` (4318). Bind `0.0.0.0` for cross-container traffic. |
+| `jaeger` | traces | core+contrib | **Legacy ingest only** (beta). Receives Jaeger thrift/gRPC spans — use to migrate apps still emitting Jaeger protocol. New setups use `otlp`. (The jaeger *exporter* was removed — send to Jaeger via OTLP.) |
 | `prometheus` | metrics | contrib | Embeds a full Prometheus scrape config under `config.scrape_configs`. Metrics-only. |
 | `hostmetrics` | metrics | contrib | Host CPU/mem/disk/net. Needs `scrapers:` block; some scrapers need host mounts/privileges. |
 | `filelog` | logs | contrib | Tails files. `include`/`exclude` globs + `operators` for parsing. Watch `start_at: beginning` vs `end`. |
@@ -35,7 +36,7 @@ Distribution legend: **[core]** ships in `otel/opentelemetry-collector`;
 | `debug` | all | core | Console output. `verbosity: detailed` for debugging. **Replaces the removed `logging` exporter.** |
 | `prometheus` | metrics | contrib | **PULL** — exposes `/metrics` for Prometheus to scrape. Sets an `endpoint` to listen on. |
 | `prometheusremotewrite` | metrics | contrib | **PUSH** — remote-writes to Mimir/Thanos/Cortex or Prometheus with the remote-write receiver enabled. |
-| `loki` | logs | contrib | **Deprecated** — prefer `otlphttp` to Loki's native OTLP endpoint. |
+| `loki` | logs | — | **Removed** from contrib — use `otlphttp` to Loki's native OTLP endpoint (`:3100/otlp`). |
 | `kafka` | all | contrib | Mirror of the kafka receiver; set `protocol_version`. |
 | `loadbalancing` | traces, logs | contrib | Routes by key (e.g. trace ID) across backend Collectors — required for sharded `tail_sampling`. |
 
@@ -57,9 +58,9 @@ Distribution legend: **[core]** ships in `otel/opentelemetry-collector`;
 | `basicauth` / `oauth2client` / `headers_setter` | contrib | Auth for exporters/receivers via `auth:` refs. |
 
 ## Deprecated / removed — replace on sight
-- `logging` exporter → **`debug`**
-- `loki` exporter → **`otlphttp`** to Loki OTLP endpoint
-- standalone `jaeger` receiver/exporter → **`otlp`/`otlphttp`** (Jaeger ingests OTLP natively)
+- `logging` exporter (removed) → **`debug`**
+- `loki` exporter (removed from contrib) → **`otlphttp`** to Loki OTLP endpoint
+- `jaeger` **exporter** (removed) → **`otlp`/`otlphttp`** (Jaeger ingests OTLP natively). NB: the `jaeger` **receiver** is *not* removed — still [core]+[contrib], beta, for legacy Jaeger-protocol ingest.
 - bare `${VAR}` env syntax → **`${env:VAR}`**
 - `service.telemetry.metrics.address` (old) → `service.telemetry.metrics.readers` (newer schema)
 
