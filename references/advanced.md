@@ -7,19 +7,54 @@ so the answer is correct every time, not when the model happens to remember.
 ## 1. OTTL — the transform/filter language people invent syntax for
 
 The `transform` and `filter` processors use **OTTL** (OpenTelemetry Transformation
-Language), not jq, not SQL, not `attr = value`. The single most common failure is
-hallucinated syntax. The rules:
+Language), not jq, not SQL, not `attr = value`. The rules:
 
 - Statements are **function calls**: `set(...)`, `delete_key(...)`, `keep_keys(...)`,
   `replace_pattern(...)`, `limit(...)`, `truncate_all(...)`. You do **not** write
   `attributes["x"] = "y"`.
 - A condition uses a trailing `where`: `set(attributes["env"], "prod") where attributes["env"] == nil`.
-- Paths are context-qualified: `resource.attributes["k"]`, `span.attributes["k"]`,
-  `span.status.code`, `metric.name`, `datapoint.attributes["k"]`, `log.body`.
 - `error_mode: ignore` (or `silent`/`propagate`) controls what happens when a
   statement errors on a record — set it deliberately.
+- Regexes are Go **RE2**: no lookahead, no lookbehind. `(?=...)` does not compile.
 
-`transform` processor, grouped form (valid across current versions):
+### The live confusion: two statement forms, and you must not mix them
+
+There are two ways to write the same statement, and they use **different path
+syntax**. Picking one is fine; mixing them is a parse failure.
+
+**Inferred form** (what the processor docs lead with) — a flat statement list where
+every path carries its context prefix, and the processor infers the context:
+
+```yaml
+trace_statements:
+  - set(span.attributes["deployment.environment"], "prod") where span.attributes["deployment.environment"] == nil
+  - set(resource.attributes["deployment.tier"], "backend") where IsMatch(resource.attributes["service.name"], "^api-")
+```
+
+**Explicit form** — a `context:` block, inside which paths are written **bare**,
+because the context already says what they refer to:
+
+```yaml
+trace_statements:
+  - context: span
+    statements:
+      - set(attributes["deployment.environment"], "prod") where attributes["deployment.environment"] == nil
+  - context: resource
+    statements:
+      - set(attributes["deployment.tier"], "backend") where IsMatch(attributes["service.name"], "^api-")
+```
+
+Both work. The trap is writing `span.attributes[...]` *inside* a `context: span`
+block, or bare `attributes[...]` in a flat list — those don't parse. The explicit
+form is not deprecated; the docs simply present inference as the default because it
+picks the most efficient context for you.
+
+One thing the form does **not** change: if the condition and the target are both
+resource-level (as in the `deployment.tier` example), do it at resource scope. A
+resource is shared by every span in the batch, so setting a resource attribute from
+span scope applies it to siblings you didn't intend.
+
+`transform` processor, explicit form:
 
 ```yaml
 processors:
@@ -93,17 +128,46 @@ service:
 By default the Prometheus/`prometheusremotewrite` exporter puts resource
 attributes only on a separate `target_info` series, **not** on each metric. People
 expect `service.name`, `deployment.environment`, etc. as labels on every series and
-are baffled when they're absent. Turn the conversion on explicitly:
+are baffled when they're absent.
+
+This is a trade-off with two valid answers — pick one deliberately and say which.
+
+**Option A — leave it off (the default), join at query time.** Series stay lean;
+`service.name` is reachable through `target_info`:
+
+```promql
+sum(rate(calls_total[5m])) * on (job, instance) group_left(service_name) target_info
+```
+
+Keep `target_info: enabled: true` so the joinable series exists.
+
+**Option B — turn it on, but scrub first.** The conversion copies *every* resource
+attribute onto *every* series, including `k8s.pod.name`, `container.id`, `host.id`
+— that multiplies series count by pod count. Only enable it after dropping the
+high-cardinality attributes:
 
 ```yaml
+processors:
+  transform/trim_resource_attrs:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          - delete_key(attributes, "k8s.pod.name")
+          - delete_key(attributes, "k8s.pod.uid")
+          - delete_key(attributes, "container.id")
+          - delete_key(attributes, "host.id")
+
 exporters:
   prometheusremotewrite:
     endpoint: ${env:MIMIR_ENDPOINT}
     resource_to_telemetry_conversion:
-      enabled: true        # copy resource attributes onto each metric as labels
+      enabled: true        # safe only because the transform above ran first
+    target_info:
+      enabled: true
 ```
 
-(Watch cardinality — don't promote high-cardinality resource attributes.)
+Enabling it without the scrub is the cardinality failure people hit in production.
 
 ## 4. tail_sampling at scale needs a load-balancing tier
 
@@ -153,8 +217,11 @@ expected trace duration or late spans get dropped from the decision.
 ## 5. Exporter reliability — the part that's silently missing in prod
 
 Default exporters drop data on transient backend failure. For anything real, enable
-the queue + retry (and persist the queue across restarts with a `file_storage`
-extension if you can't lose data):
+retry **and** a queue. Retry alone only re-attempts the request in flight; without a
+queue there is nowhere to park the backlog that arrives during the outage.
+
+**The queue key is per-exporter.** `otlp`/`otlphttp` use the shared exporterhelper
+`sending_queue`, which can be persisted with a `file_storage` extension:
 
 ```yaml
 exporters:
@@ -166,8 +233,44 @@ exporters:
     sending_queue:
       enabled: true
       queue_size: 5000
-      # storage: file_storage   # + extensions:[file_storage] for on-disk durability
+      storage: file_storage/queue   # survives a restart; needs a persistent volume
+
+extensions:
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    create_directory: true          # otherwise startup fails if the path is absent
+# and list file_storage/queue in service.extensions
 ```
+
+`prometheusremotewrite` does **not** accept `sending_queue` — it is rejected at
+startup (`'prometheusremotewriteexporter.Config' has invalid keys: sending_queue`).
+Its key is `remote_write_queue`, and that queue is **memory-only**: it takes no
+`storage:`, so a restart loses the backlog.
+
+That is not the same as "this exporter has no durability". It ships its own
+write-ahead log, which is the on-disk path here:
+
+```yaml
+exporters:
+  prometheusremotewrite:
+    endpoint: ${env:MIMIR_ENDPOINT}
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 300s
+    remote_write_queue:
+      enabled: true
+      queue_size: 10000
+      num_consumers: 5
+    wal:
+      directory: /var/lib/otelcol/prw-wal   # persistent volume, not emptyDir
+      buffer_size: 300
+      truncate_frequency: 60s
+```
+
+Honest ceiling: whatever sits in the in-memory queue but is not yet WAL-committed,
+plus the `batch` window upstream, is still lost on an ungraceful kill. If the
+requirement is a hard "no loss", move the path to `otlphttp` +
+`sending_queue.storage` against an OTLP-capable backend instead.
 
 ## 6. memory_limiter sizing
 Set both `limit_mib` and `spike_limit_mib` (~20% of limit), and give the container

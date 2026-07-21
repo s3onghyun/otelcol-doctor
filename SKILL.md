@@ -130,10 +130,14 @@ A capable model already handles the basics above. These six are the ones it gets
 *inconsistently* right; treat them as load-bearing and pull the exact patterns
 from `references/advanced.md`:
 
-1. **OTTL syntax** (`transform`/`filter` processors). It's a function language —
-   `set(attributes["x"], "y") where <cond>`, `delete_key(...)`, `replace_pattern(...)`
-   — **not** `attributes["x"] = "y"`, not jq, not SQL. Hallucinated OTTL is the #1
-   advanced failure. Always set `error_mode`.
+1. **OTTL statement form** (`transform`/`filter` processors). The function syntax
+   itself — `set(attributes["x"], "y") where <cond>`, `delete_key(...)`,
+   `replace_pattern(...)` — is usually recalled correctly. What isn't: there are
+   **two forms with different path syntax**, and mixing them fails to parse. Flat
+   list → prefix every path (`span.attributes[...]`); inside a `context: span`
+   block → write paths bare (`attributes[...]`). Pick one per statement list. See
+   `references/advanced.md` §1. Always set `error_mode`; regexes are RE2 (no
+   lookahead).
 2. **spanmetrics (and any connector) is wired in TWO pipelines** — as an *exporter*
    in the source pipeline and a *receiver* in the destination pipeline. Wiring it
    once silently produces no metrics (or a validation error).
