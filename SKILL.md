@@ -1,13 +1,14 @@
 ---
 name: otel-collector-config
 description: >-
-  Write, fix, and validate OpenTelemetry Collector configuration (otelcol).
-  Use whenever the user is authoring or debugging an OpenTelemetry Collector
-  config YAML — defining receivers/processors/exporters/connectors, wiring
-  service pipelines, choosing between the core and contrib distributions, or
-  exporting to OTLP/Prometheus/Loki/Tempo/Mimir. Triggers on "otelcol",
-  "otel collector config", "collector pipeline", "receivers/processors/exporters",
-  "memory_limiter", "otlp exporter", "prometheusremotewrite", "tail_sampling".
+  Use when authoring, debugging, or reviewing an OpenTelemetry Collector (otelcol)
+  configuration — defining receivers/processors/exporters/connectors, wiring service
+  pipelines, choosing between the core and contrib distributions, or exporting to
+  OTLP/Prometheus/Loki/Tempo/Mimir. Also use when a Collector starts but no data
+  arrives, a component is rejected at startup, or metrics lack expected labels.
+  Triggers on "otelcol", "otel collector config", "collector pipeline",
+  "receivers/processors/exporters", "memory_limiter", "otlp exporter",
+  "prometheusremotewrite", "spanmetrics", "tail_sampling".
 ---
 
 # OpenTelemetry Collector config — doctor
@@ -160,6 +161,11 @@ from `references/advanced.md`:
    `sending_queue` at startup. If validation rejects a queue key, look up that
    exporter's own key — do **not** conclude the exporter has no queue and ship it with
    retry only. Defaults drop data on a transient backend blip.
+   Durability differs too: `remote_write_queue` is memory-only (it takes no `storage:`),
+   so a restart loses the backlog — but that does **not** mean the exporter has no
+   on-disk option. `prometheusremotewrite` has its own `wal:` (`directory`,
+   `buffer_size`, `truncate_frequency`). For survive-a-restart, use `wal` here, or move
+   the path to `otlphttp` + `sending_queue.storage` against an OTLP-capable backend.
 
 When the request touches any of these, encode the pattern explicitly rather than
 trusting recall — that's the difference this skill is for.
