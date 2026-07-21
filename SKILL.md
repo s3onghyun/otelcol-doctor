@@ -125,7 +125,7 @@ the corrected config and validate it.
 
 ## The hard parts — get these right every time (see `references/advanced.md`)
 
-A capable model already handles the basics above. These five are the ones it gets
+A capable model already handles the basics above. These six are the ones it gets
 *inconsistently* right; treat them as load-bearing and pull the exact patterns
 from `references/advanced.md`:
 
@@ -136,16 +136,30 @@ from `references/advanced.md`:
 2. **spanmetrics (and any connector) is wired in TWO pipelines** — as an *exporter*
    in the source pipeline and a *receiver* in the destination pipeline. Wiring it
    once silently produces no metrics (or a validation error).
-3. **`resource_to_telemetry_conversion: enabled: true`** on the Prometheus/remote-write
-   exporter — without it, resource attributes (`service.name`, `deployment.environment`)
-   land only on `target_info`, not as labels on each series. This is the usual
-   "why is my label missing" cause.
-4. **`tail_sampling` at >1 replica needs a `loadbalancing` tier** keyed by `traceID`,
+3. **Sampling must sit *downstream* of metric generation.** If `tail_sampling` (or any
+   sampler) runs before the `spanmetrics` connector, RED metrics are computed from only
+   the surviving fraction — request rate is wrong by the sampling ratio and *nothing looks
+   broken*. Fork instead: the ingest pipeline exports to `[spanmetrics, forward/sampled]`;
+   a second traces pipeline receives `forward/sampled`, applies `tail_sampling`, and
+   exports to the trace backend. spanmetrics must see 100% of spans.
+4. **`resource_to_telemetry_conversion` is a trade-off, not a default-on.** Off (the
+   default), resource attributes land only on the `target_info` series — so
+   `sum by (service_name)` returns nothing and you must join
+   (`... * on (job, instance) group_left(service_name) target_info`). On, it copies
+   **every** resource attribute onto **every** series — including `k8s.pod.name`,
+   `host.id`, `container.id`, multiplying series count per pod. Rule: enable it only
+   after dropping the high-cardinality resource attributes; otherwise leave it off and
+   keep `target_info: enabled: true` for the join. State which you chose and why.
+5. **`tail_sampling` at >1 replica needs a `loadbalancing` tier** keyed by `traceID`,
    so all spans of a trace reach the same sampler instance. Tail-sampling directly
    behind a plain load balancer is broken sampling. `tail_sampling` goes before `batch`.
-5. **Exporter reliability** — production exporters need `retry_on_failure` +
-   `sending_queue` (and a `file_storage`-backed queue if data loss is unacceptable).
-   Defaults drop data on a transient backend blip.
+6. **Exporter reliability — and the queue key is per-exporter.** Production exporters
+   need `retry_on_failure` *plus a queue*, but the key differs: `otlp`/`otlphttp` use
+   `sending_queue` (add `storage: file_storage/...` when data loss is unacceptable),
+   while **`prometheusremotewrite` uses `remote_write_queue`** and rejects
+   `sending_queue` at startup. If validation rejects a queue key, look up that
+   exporter's own key — do **not** conclude the exporter has no queue and ship it with
+   retry only. Defaults drop data on a transient backend blip.
 
 When the request touches any of these, encode the pattern explicitly rather than
 trusting recall — that's the difference this skill is for.
@@ -157,6 +171,10 @@ trusting recall — that's the difference this skill is for.
 
 ## Output discipline
 - Emit **valid YAML only** inside config blocks — no `...` placeholders that won't parse.
+- **Before emitting, cross-check every name in `service.pipelines` against the blocks
+  above it.** Connectors are the usual miss: they appear in two pipelines, so it's easy
+  to reference `forward/x` or `spanmetrics` without ever declaring it under `connectors:`.
+  A config that needs a "one thing to fix before you deploy" footnote is a failed answer.
 - Comment the non-obvious lines (why `memory_limiter` is first, why this exporter).
 - Prefer the smallest config that satisfies the request; don't bolt on components the user didn't ask for.
 - If a component is contrib-only, say so and name the image/build needed.
