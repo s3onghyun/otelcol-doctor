@@ -35,7 +35,7 @@ Distribution legend: **[core]** ships in `otel/opentelemetry-collector`;
 | `otlphttp` | all | core | OTLP over **HTTP** (4318). Use for backends that expose an OTLP/HTTP endpoint (incl. Loki `:3100/otlp`). |
 | `debug` | all | core | Console output. `verbosity: detailed` for debugging. **Replaces the removed `logging` exporter.** |
 | `prometheus` | metrics | contrib | **PULL** — exposes `/metrics` for Prometheus to scrape. Sets an `endpoint` to listen on. |
-| `prometheusremotewrite` | metrics | contrib | **PUSH** — remote-writes to Mimir/Thanos/Cortex or Prometheus with the remote-write receiver enabled. |
+| `prometheusremotewrite` | metrics | contrib | **PUSH** — remote-writes to Mimir/Thanos/Cortex or Prometheus with the remote-write receiver enabled. **Requires cumulative temporality** — if your apps emit delta metrics, run the `deltatocumulative` processor first or the values are wrong. Queue key is `remote_write_queue` (not `sending_queue`); persist across restarts with its `wal`, not `file_storage`. |
 | `loki` | logs | — | **Removed** from contrib — use `otlphttp` to Loki's native OTLP endpoint (`:3100/otlp`). |
 | `kafka` | all | contrib | Mirror of the kafka receiver; set `protocol_version`. |
 | `loadbalancing` | traces, logs | contrib | Routes by key (e.g. trace ID) across backend Collectors — required for sharded `tail_sampling`. |
