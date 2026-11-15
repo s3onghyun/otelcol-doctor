@@ -1,5 +1,22 @@
 # otelcol-doctor
 
+> [!IMPORTANT]
+> **Maintenance ended (2026-11). This repository is archived and read-only.**
+>
+> In a 16-run evaluation against Collector 0.164/0.165, current models reached the same results without this skill by checking `otelcol components`, `otelcol validate` and a real start-up, and the skill prevented no mistakes. The hand-maintained lists here have drifted: Collector moved component names to snake_case between v0.146 and v0.158, most of the core-vs-contrib table is no longer true, and `resource_to_telemetry_conversion` was deprecated in v0.160.
+>
+> **Still valid:** the processor-order rules; the `logging` and `loki` exporters are removed; Prometheus remote write needs `delta_to_cumulative` in front of it for delta sources.
+>
+> **Look instead at:** [agent-otel-kit](https://github.com/s3onghyun/agent-otel-kit) for a verified collector config with CI checks, and the official component READMEs in [opentelemetry-collector](https://github.com/open-telemetry/opentelemetry-collector) and [opentelemetry-collector-contrib](https://github.com/open-telemetry/opentelemetry-collector-contrib). Always confirm component names against the image you deploy.
+>
+> **유지보수 종료 (2026-11). 이 저장소는 archive되어 읽기 전용입니다.**
+>
+> Collector 0.164/0.165 기준 16회 평가에서, 현재 모델은 이 스킬 없이도 `otelcol components`, `otelcol validate`, 실제 기동 확인으로 같은 결과를 냈고 스킬이 막아 준 실수는 없었습니다. 여기서 손으로 관리하던 목록은 낡았습니다. Collector는 v0.146–v0.158 사이에 컴포넌트 이름을 snake_case로 바꿨고, core-vs-contrib 표는 대부분 더 이상 맞지 않으며, `resource_to_telemetry_conversion`은 v0.160에서 deprecated됐습니다.
+>
+> **아직 유효한 내용:** processor 순서 규칙, `logging`·`loki` exporter 제거, delta 소스를 받는 Prometheus remote write 앞에는 `delta_to_cumulative`가 필요하다는 점.
+>
+> **대신 볼 곳:** CI 검사가 붙은 검증된 collector 설정은 [agent-otel-kit](https://github.com/s3onghyun/agent-otel-kit), 그리고 공식 컴포넌트 README. 컴포넌트 이름은 배포할 이미지에서 직접 확인하세요.
+
 **A Claude Code / Codex / Cursor skill that writes, fixes, and validates OpenTelemetry Collector configs — and gets the sharp edges right.**
 
 The OpenTelemetry Collector is five concepts and a hundred footguns: processor
